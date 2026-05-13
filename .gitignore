@@ -1,0 +1,19 @@
+# Büyük veri setleri
+data/raw/
+data/processed/
+*.xlsx
+*.csv
+
+# BERT Model Çıktıları ve Kayıt Noktaları
+#models/
+*.bin
+*.safetensors
+checkpoint-*/
+
+# Python ve Sanal Ortam
+__pycache__/
+venv/
+.env
+
+# VS Code Ayarları
+.vscode/
