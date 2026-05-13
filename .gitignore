@@ -1,19 +1,26 @@
-# Büyük veri setleri
-data/raw/
-data/processed/
-*.xlsx
-*.csv
-
-# BERT Model Çıktıları ve Kayıt Noktaları
-#models/
-*.bin
-*.safetensors
-checkpoint-*/
-
-# Python ve Sanal Ortam
+# Python sistem dosyaları
 __pycache__/
+*.py[cod]
+*$py.class
+.venv/
 venv/
-.env
+ENV/
 
-# VS Code Ayarları
+# Veri dosyaları (Çok büyük oldukları için Drive'dan paylaşılmalı)
+data/raw/*.csv
+data/raw/*.xlsx
+data/processed/*.csv
+
+# Model çıktıları ve Checkpointler (En önemli kısım)
+models/
+outputs/
+*.bin
+*.pt
+*.pth
+*.safetensors
+
+# VS Code ayarları
 .vscode/
+
+# Jupyter Notebook yedekleri
+.ipynb_checkpoints/
