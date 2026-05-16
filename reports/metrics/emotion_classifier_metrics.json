@@ -1,0 +1,13 @@
+{
+  "target": "Emotion",
+  "model_name": "emotion_classifier",
+  "rows_used": 3262,
+  "class_count": 10,
+  "top_n": 10,
+  "min_count": 10,
+  "test_size": 653,
+  "accuracy": 0.5421133231240429,
+  "macro_f1": 0.2834854274608683,
+  "weighted_f1": 0.5195009438717417,
+  "top_3_accuracy": 0.8147013782542113
+}

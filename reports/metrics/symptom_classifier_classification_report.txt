@@ -1,0 +1,56 @@
+                      precision    recall  f1-score   support
+
+                alay       0.00      0.00      0.00         2
+   alerjik reaksiyon       1.00      1.00      1.00         2
+     anafilaktik şok       1.00      1.00      1.00         1
+              aritmi       0.75      1.00      0.86         3
+                ateş       0.89      1.00      0.94         8
+                ağrı       0.60      0.86      0.71         7
+        bacak ağrısı       0.00      0.00      0.00         2
+             bayılma       1.00      1.00      1.00         1
+          baş ağrısı       0.00      0.00      0.00         2
+      burun kanaması       1.00      0.50      0.67         2
+   böbrek yetmezliği       0.80      1.00      0.89         4
+           depresyon       1.00      0.50      0.67         2
+             döküntü       1.00      1.00      1.00         6
+          enfeksiyon       0.80      0.89      0.84         9
+                felç       0.67      0.67      0.67         3
+        göğüs ağrısı       1.00      1.00      1.00         2
+        halüsinasyon       1.00      1.00      1.00         3
+            hematüri       0.50      1.00      0.67         2
+             hipoksi       1.00      0.50      0.67         2
+        kalp durması       0.00      0.00      0.00         3
+          kalp krizi       1.00      1.00      1.00         2
+              kanama       0.78      0.70      0.74        10
+              kanser       1.00      0.67      0.80         6
+karaciğer yetmezliği       0.60      0.75      0.67         4
+     kardiyak arrest       0.00      0.00      0.00         1
+        karın ağrısı       0.75      0.75      0.75         4
+                kist       0.50      0.50      0.50         2
+               kitle       0.00      0.00      0.00         1
+                koma       1.00      0.50      0.67         4
+ kurşun zehirlenmesi       1.00      1.00      1.00         2
+               kusma       0.00      0.00      0.00         2
+              lezyon       1.00      1.00      1.00         2
+               lupus       1.00      1.00      1.00         2
+                  ms       0.67      1.00      0.80         2
+       nefes darlığı       0.67      0.40      0.50         5
+               nöbet       0.83      0.62      0.71         8
+               pıhtı       1.00      1.00      1.00         4
+          pıhtılaşma       0.00      0.00      0.00         2
+pıhtılaşma bozukluğu       0.33      0.50      0.40         2
+             seizure       0.67      1.00      0.80         2
+     solunum durması       0.20      1.00      0.33         1
+   solunum sıkıntısı       0.00      0.00      0.00         1
+                tanı       0.00      0.00      0.00         3
+           taşikardi       0.75      0.75      0.75         4
+              tedavi       0.00      0.00      0.00         2
+               tümör       0.56      0.83      0.67         6
+               v-fib       0.50      1.00      0.67         1
+            vaskülit       0.50      1.00      0.67         2
+          zehirlenme       0.75      1.00      0.86         3
+             öksürük       1.00      1.00      1.00         2
+
+            accuracy                           0.71       158
+           macro avg       0.62      0.66      0.62       158
+        weighted avg       0.69      0.71      0.68       158

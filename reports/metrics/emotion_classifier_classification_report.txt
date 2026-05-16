@@ -1,0 +1,16 @@
+              precision    recall  f1-score   support
+
+        acil       0.25      0.23      0.24        13
+      alaycı       0.38      0.26      0.31        23
+    analitik       0.19      0.17      0.18        35
+       ciddi       0.28      0.24      0.25       102
+        emin       0.00      0.00      0.00        12
+      endişe       0.15      0.12      0.14        24
+    endişeli       0.10      0.05      0.06        22
+        nötr       0.66      0.76      0.71       370
+       panik       0.71      0.74      0.72        39
+    tarafsız       0.40      0.15      0.22        13
+
+    accuracy                           0.54       653
+   macro avg       0.31      0.27      0.28       653
+weighted avg       0.50      0.54      0.52       653
