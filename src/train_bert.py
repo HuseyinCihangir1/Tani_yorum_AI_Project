@@ -18,16 +18,29 @@ TARGET_COLUMN = "Symptom"
 TEXT_COLUMN = "text"
 
 DATA_PATH = Path("data/processed/ready_data.csv")
+PREPROCESS_METADATA_PATH = Path("data/processed/preprocess_metadata.json")
 SOURCE_MODEL_DIR = Path("models/house_bert_model")
-OUTPUT_MODEL_DIR = Path("models/house_bert_model_improved_augmented")
+OUTPUT_MODEL_DIR = Path("models/house_bert_model_finetuned")
 OUTPUT_DIR = Path("outputs/bert_training")
+EXPECTED_DATA_PIPELINE_VERSION = "symptom_exploded_canonical_v3"
 
 TOP_N_LABELS = 30
+OTHER_LABEL = "diğer"
+USE_OTHER_LABEL = True
 MAX_LENGTH = 128
 TEST_SIZE = 0.15
 VALIDATION_SIZE = 0.15
-CLASSIFIER_EPOCHS = 140
-EARLY_STOPPING_PATIENCE = 20
+FULL_FINE_TUNE_EPOCHS = 8
+CLASSIFIER_HEAD_EPOCHS = 140
+FULL_FINE_TUNE_PATIENCE = 3
+CLASSIFIER_HEAD_PATIENCE = 20
+FULL_FINE_TUNE_BATCH_SIZE = 4
+CLASSIFIER_TEXT_BATCH_SIZE = 32
+FEATURE_BATCH_SIZE = 128
+FULL_FINE_TUNE_LR = 2e-5
+CLASSIFIER_HEAD_LR = 8e-4
+USE_SYNTHETIC_AUGMENTATION = True
+USE_TEMPLATE_AUGMENTATION = False
 
 SYNTHETIC_SENTENCE_TEMPLATES = (
     "Hasta {term} sikayetiyle degerlendiriliyor.",
@@ -143,7 +156,15 @@ def load_training_frame() -> tuple[pd.DataFrame, list[str], dict[str, int]]:
 
     class_counts = df[TARGET_COLUMN].value_counts()
     selected_labels = class_counts.nlargest(TOP_N_LABELS).index.tolist()
-    df = df[df[TARGET_COLUMN].isin(selected_labels)].copy()
+    df["original_target"] = df[TARGET_COLUMN]
+
+    if USE_OTHER_LABEL:
+        df[TARGET_COLUMN] = df[TARGET_COLUMN].where(
+            df[TARGET_COLUMN].isin(selected_labels),
+            OTHER_LABEL,
+        )
+    else:
+        df = df[df[TARGET_COLUMN].isin(selected_labels)].copy()
 
     labels = sorted(df[TARGET_COLUMN].unique().tolist())
     label_to_id = {label: index for index, label in enumerate(labels)}
@@ -183,24 +204,28 @@ def build_synthetic_frame(labels: list[str], label_to_id: dict[str, int]) -> pd.
     seen = set()
 
     for label in labels:
+        if USE_OTHER_LABEL and label == OTHER_LABEL:
+            continue
+
         terms = {label}
         terms.update(ALIASES_BY_LABEL.get(label, ()))
 
-        for term in sorted(terms):
-            for template in SYNTHETIC_SENTENCE_TEMPLATES:
-                text = template.format(term=term)
-                key = (text.casefold(), label)
-                if key in seen:
-                    continue
-                seen.add(key)
-                rows.append(
-                    {
-                        TEXT_COLUMN: text,
-                        TARGET_COLUMN: label,
-                        "label": label_to_id[label],
-                        "is_synthetic": True,
-                    }
-                )
+        if USE_TEMPLATE_AUGMENTATION:
+            for term in sorted(terms):
+                for template in SYNTHETIC_SENTENCE_TEMPLATES:
+                    text = template.format(term=term)
+                    key = (text.casefold(), label)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    rows.append(
+                        {
+                            TEXT_COLUMN: text,
+                            TARGET_COLUMN: label,
+                            "label": label_to_id[label],
+                            "is_synthetic": True,
+                        }
+                    )
 
         for text in SPECIFIC_SYNTHETIC_SENTENCES.get(label, ()):
             key = (text.casefold(), label)
@@ -353,6 +378,46 @@ def evaluate_classifier(dropout, classifier, loader, device, loss_fn) -> dict:
     }
 
 
+def evaluate_full_model(model, loader, device, loss_fn) -> dict:
+    model.eval()
+    total_loss = 0.0
+    total_examples = 0
+    all_labels = []
+    all_predictions = []
+    top3_correct = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            labels = batch.pop("labels").to(device)
+            inputs = {key: value.to(device) for key, value in batch.items()}
+            logits = model(**inputs).logits
+            loss = loss_fn(logits, labels)
+
+            total_loss += float(loss.item()) * labels.size(0)
+            total_examples += labels.size(0)
+
+            predictions = logits.argmax(dim=-1)
+            top_k = min(3, logits.shape[-1])
+            top_indices = logits.topk(top_k, dim=-1).indices
+            top3_correct += int((top_indices == labels.unsqueeze(1)).any(dim=1).sum().item())
+
+            all_labels.extend(labels.cpu().numpy().tolist())
+            all_predictions.extend(predictions.cpu().numpy().tolist())
+
+    return {
+        "loss": total_loss / max(total_examples, 1),
+        "accuracy": accuracy_score(all_labels, all_predictions),
+        "macro_f1": f1_score(all_labels, all_predictions, average="macro", zero_division=0),
+        "weighted_f1": f1_score(
+            all_labels,
+            all_predictions,
+            average="weighted",
+            zero_division=0,
+        ),
+        "top_3_accuracy": top3_correct / max(total_examples, 1),
+    }
+
+
 def train_classifier_epoch(dropout, classifier, loader, device, optimizer, loss_fn) -> float:
     dropout.train()
     classifier.train()
@@ -376,8 +441,53 @@ def train_classifier_epoch(dropout, classifier, loader, device, optimizer, loss_
     return total_loss / max(total_examples, 1)
 
 
+def train_full_model_epoch(model, loader, device, optimizer, loss_fn) -> float:
+    model.train()
+    total_loss = 0.0
+    total_examples = 0
+
+    for batch in loader:
+        labels = batch.pop("labels").to(device)
+        inputs = {key: value.to(device) for key, value in batch.items()}
+
+        optimizer.zero_grad(set_to_none=True)
+        logits = model(**inputs).logits
+        loss = loss_fn(logits, labels)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+
+        total_loss += float(loss.item()) * labels.size(0)
+        total_examples += labels.size(0)
+
+    return total_loss / max(total_examples, 1)
+
+
+def predict_full_model(model, loader, device) -> tuple[list[int], list[int]]:
+    model.eval()
+    all_labels = []
+    all_predictions = []
+
+    with torch.no_grad():
+        for batch in loader:
+            labels = batch.pop("labels").to(device)
+            inputs = {key: value.to(device) for key, value in batch.items()}
+            logits = model(**inputs).logits
+            predictions = logits.argmax(dim=-1)
+            all_labels.extend(labels.cpu().numpy().tolist())
+            all_predictions.extend(predictions.cpu().numpy().tolist())
+
+    return all_labels, all_predictions
+
+
 def save_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def read_preprocess_metadata() -> dict:
+    if not PREPROCESS_METADATA_PATH.exists():
+        return {}
+    return json.loads(PREPROCESS_METADATA_PATH.read_text(encoding="utf-8"))
 
 
 def save_class_prototypes(model, tokenizer, df: pd.DataFrame, labels: list[str], device) -> None:
@@ -414,16 +524,50 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
+    preprocess_metadata = read_preprocess_metadata()
+    pipeline_version = preprocess_metadata.get("data_pipeline_version")
+    if pipeline_version and pipeline_version != EXPECTED_DATA_PIPELINE_VERSION:
+        print(
+            "WARNING: preprocess pipeline version mismatch: "
+            f"{pipeline_version} != {EXPECTED_DATA_PIPELINE_VERSION}",
+            flush=True,
+        )
+
     df, labels, selected_counts = load_training_frame()
     train_df, val_df, test_df = split_frame(df)
 
     label_to_id = {label: index for index, label in enumerate(labels)}
     id_to_label = {index: label for label, index in label_to_id.items()}
     json_id_to_label = {str(index): label for index, label in id_to_label.items()}
-    synthetic_df = build_synthetic_frame(labels, label_to_id)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    full_fine_tune = device.type == "cuda"
+    freeze_encoder = not full_fine_tune
+    max_epochs = FULL_FINE_TUNE_EPOCHS if full_fine_tune else CLASSIFIER_HEAD_EPOCHS
+    early_stopping_patience = (
+        FULL_FINE_TUNE_PATIENCE if full_fine_tune else CLASSIFIER_HEAD_PATIENCE
+    )
+    batch_size = FULL_FINE_TUNE_BATCH_SIZE if full_fine_tune else CLASSIFIER_TEXT_BATCH_SIZE
+    learning_rate = FULL_FINE_TUNE_LR if full_fine_tune else CLASSIFIER_HEAD_LR
+    training_mode = (
+        "full_bert_fine_tuning"
+        if full_fine_tune
+        else "frozen_bert_feature_extraction_classifier_head"
+    )
+
     original_train_rows = len(train_df)
-    train_df = append_synthetic_examples(train_df, synthetic_df)
-    prototype_df = append_synthetic_examples(df, synthetic_df)
+    synthetic_df = (
+        build_synthetic_frame(labels, label_to_id)
+        if USE_SYNTHETIC_AUGMENTATION
+        else pd.DataFrame(columns=[TEXT_COLUMN, TARGET_COLUMN, "label", "is_synthetic"])
+    )
+    if USE_SYNTHETIC_AUGMENTATION:
+        train_df = append_synthetic_examples(train_df, synthetic_df)
+        prototype_df = append_synthetic_examples(df, synthetic_df)
+    else:
+        train_df = train_df.copy()
+        train_df["is_synthetic"] = False
+        prototype_df = df.copy()
 
     tokenizer = AutoTokenizer.from_pretrained(SOURCE_MODEL_DIR, local_files_only=True)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -438,50 +582,16 @@ def main() -> None:
     model.config.id2label = id_to_label
     model.config.label2id = label_to_id
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    freeze_encoder = True
-    batch_size = 32
-    feature_batch_size = 128
-    learning_rate = 8e-4
-
     trainable_names = configure_trainable_parameters(model, freeze_encoder)
     model.to(device)
-
-    train_text_loader = make_loader(tokenizer, train_df, batch_size=batch_size, shuffle=False)
-    val_text_loader = make_loader(tokenizer, val_df, batch_size=batch_size, shuffle=False)
-    test_text_loader = make_loader(tokenizer, test_df, batch_size=batch_size, shuffle=False)
-
-    print("Extracting BERT features...", flush=True)
-    train_features, train_labels = extract_features(model, train_text_loader, device)
-    val_features, val_labels = extract_features(model, val_text_loader, device)
-    test_features, test_labels = extract_features(model, test_text_loader, device)
-
-    train_loader = make_feature_loader(
-        train_features,
-        train_labels,
-        batch_size=feature_batch_size,
-        shuffle=True,
-    )
-    val_loader = make_feature_loader(
-        val_features,
-        val_labels,
-        batch_size=feature_batch_size,
-        shuffle=False,
-    )
-    test_loader = make_feature_loader(
-        test_features,
-        test_labels,
-        batch_size=feature_batch_size,
-        shuffle=False,
-    )
 
     loss_fn = torch.nn.CrossEntropyLoss(
         weight=class_weight_tensor(train_df, len(labels), device)
     )
-    optimizer = torch.optim.AdamW(model.classifier.parameters(), lr=learning_rate)
 
     print(f"Device: {device}", flush=True)
     print(f"Freeze encoder: {freeze_encoder}", flush=True)
+    print(f"Training mode: {training_mode}", flush=True)
     print(
         "Rows: "
         f"train={len(train_df)} "
@@ -497,71 +607,157 @@ def main() -> None:
     best_weighted_f1 = -1.0
     epochs_without_improvement = 0
 
-    for epoch in range(1, CLASSIFIER_EPOCHS + 1):
-        train_loss = train_classifier_epoch(
+    if full_fine_tune:
+        train_loader = make_loader(tokenizer, train_df, batch_size=batch_size, shuffle=True)
+        val_loader = make_loader(tokenizer, val_df, batch_size=batch_size, shuffle=False)
+        test_loader = make_loader(tokenizer, test_df, batch_size=batch_size, shuffle=False)
+        optimizer = torch.optim.AdamW(
+            (parameter for parameter in model.parameters() if parameter.requires_grad),
+            lr=learning_rate,
+            weight_decay=0.01,
+        )
+
+        for epoch in range(1, max_epochs + 1):
+            train_loss = train_full_model_epoch(
+                model,
+                train_loader,
+                device,
+                optimizer,
+                loss_fn,
+            )
+            val_metrics = evaluate_full_model(model, val_loader, device, loss_fn)
+            val_metrics["epoch"] = epoch
+            val_metrics["train_loss"] = train_loss
+            history.append(val_metrics)
+
+            print(
+                "Epoch "
+                f"{epoch}/{max_epochs} - train_loss={train_loss:.4f} "
+                f"val_acc={val_metrics['accuracy']:.4f} "
+                f"val_macro_f1={val_metrics['macro_f1']:.4f} "
+                f"val_weighted_f1={val_metrics['weighted_f1']:.4f} "
+                f"val_top3={val_metrics['top_3_accuracy']:.4f}",
+                flush=True,
+            )
+
+            if val_metrics["weighted_f1"] > best_weighted_f1:
+                best_weighted_f1 = val_metrics["weighted_f1"]
+                best_state = {
+                    name: tensor.detach().cpu().clone()
+                    for name, tensor in model.state_dict().items()
+                }
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+
+            if epochs_without_improvement >= early_stopping_patience:
+                print(f"Early stopping at epoch {epoch}.", flush=True)
+                break
+
+        if best_state is not None:
+            model.load_state_dict(best_state)
+
+        test_metrics = evaluate_full_model(model, test_loader, device, loss_fn)
+        test_true, test_predictions = predict_full_model(model, test_loader, device)
+    else:
+        print("Extracting frozen BERT features...", flush=True)
+        train_text_loader = make_loader(
+            tokenizer,
+            train_df,
+            batch_size=batch_size,
+            shuffle=False,
+        )
+        val_text_loader = make_loader(tokenizer, val_df, batch_size=batch_size, shuffle=False)
+        test_text_loader = make_loader(tokenizer, test_df, batch_size=batch_size, shuffle=False)
+
+        train_features, train_labels = extract_features(model, train_text_loader, device)
+        val_features, val_labels = extract_features(model, val_text_loader, device)
+        test_features, test_labels = extract_features(model, test_text_loader, device)
+
+        train_loader = make_feature_loader(
+            train_features,
+            train_labels,
+            batch_size=FEATURE_BATCH_SIZE,
+            shuffle=True,
+        )
+        val_loader = make_feature_loader(
+            val_features,
+            val_labels,
+            batch_size=FEATURE_BATCH_SIZE,
+            shuffle=False,
+        )
+        test_loader = make_feature_loader(
+            test_features,
+            test_labels,
+            batch_size=FEATURE_BATCH_SIZE,
+            shuffle=False,
+        )
+        optimizer = torch.optim.AdamW(model.classifier.parameters(), lr=learning_rate)
+
+        for epoch in range(1, max_epochs + 1):
+            train_loss = train_classifier_epoch(
+                model.dropout,
+                model.classifier,
+                train_loader,
+                device,
+                optimizer,
+                loss_fn,
+            )
+            val_metrics = evaluate_classifier(
+                model.dropout,
+                model.classifier,
+                val_loader,
+                device,
+                loss_fn,
+            )
+            val_metrics["epoch"] = epoch
+            val_metrics["train_loss"] = train_loss
+            history.append(val_metrics)
+
+            print(
+                "Epoch "
+                f"{epoch}/{max_epochs} - train_loss={train_loss:.4f} "
+                f"val_acc={val_metrics['accuracy']:.4f} "
+                f"val_macro_f1={val_metrics['macro_f1']:.4f} "
+                f"val_weighted_f1={val_metrics['weighted_f1']:.4f} "
+                f"val_top3={val_metrics['top_3_accuracy']:.4f}",
+                flush=True,
+            )
+
+            if val_metrics["weighted_f1"] > best_weighted_f1:
+                best_weighted_f1 = val_metrics["weighted_f1"]
+                best_state = {
+                    name: tensor.detach().cpu().clone()
+                    for name, tensor in model.classifier.state_dict().items()
+                }
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+
+            if epochs_without_improvement >= early_stopping_patience:
+                print(f"Early stopping at epoch {epoch}.", flush=True)
+                break
+
+        if best_state is not None:
+            model.classifier.load_state_dict(best_state)
+
+        test_metrics = evaluate_classifier(
             model.dropout,
             model.classifier,
-            train_loader,
-            device,
-            optimizer,
-            loss_fn,
-        )
-        val_metrics = evaluate_classifier(
-            model.dropout,
-            model.classifier,
-            val_loader,
+            test_loader,
             device,
             loss_fn,
         )
-        val_metrics["epoch"] = epoch
-        val_metrics["train_loss"] = train_loss
-        history.append(val_metrics)
 
-        print(
-            "Epoch "
-            f"{epoch}/{CLASSIFIER_EPOCHS} - train_loss={train_loss:.4f} "
-            f"val_acc={val_metrics['accuracy']:.4f} "
-            f"val_macro_f1={val_metrics['macro_f1']:.4f} "
-            f"val_weighted_f1={val_metrics['weighted_f1']:.4f} "
-            f"val_top3={val_metrics['top_3_accuracy']:.4f}"
-            ,
-            flush=True,
-        )
-
-        if val_metrics["weighted_f1"] > best_weighted_f1:
-            best_weighted_f1 = val_metrics["weighted_f1"]
-            best_state = {
-                name: tensor.detach().cpu().clone()
-                for name, tensor in model.classifier.state_dict().items()
-            }
-            epochs_without_improvement = 0
-        else:
-            epochs_without_improvement += 1
-
-        if epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
-            print(f"Early stopping at epoch {epoch}.", flush=True)
-            break
-
-    if best_state is not None:
-        model.classifier.load_state_dict(best_state)
-
-    test_metrics = evaluate_classifier(
-        model.dropout,
-        model.classifier,
-        test_loader,
-        device,
-        loss_fn,
-    )
-
-    test_predictions = []
-    test_true = test_labels.numpy().tolist()
-    model.dropout.eval()
-    model.classifier.eval()
-    with torch.no_grad():
-        for features, _ in test_loader:
-            features = features.to(device)
-            logits = model.classifier(model.dropout(features))
-            test_predictions.extend(logits.argmax(dim=-1).cpu().numpy().tolist())
+        test_predictions = []
+        test_true = test_labels.numpy().tolist()
+        model.dropout.eval()
+        model.classifier.eval()
+        with torch.no_grad():
+            for features, _ in test_loader:
+                features = features.to(device)
+                logits = model.classifier(model.dropout(features))
+                test_predictions.extend(logits.argmax(dim=-1).cpu().numpy().tolist())
 
     report = classification_report(
         test_true,
@@ -580,6 +776,8 @@ def main() -> None:
         "target": TARGET_COLUMN,
         "text_column": TEXT_COLUMN,
         "top_n": TOP_N_LABELS,
+        "other_label": OTHER_LABEL if USE_OTHER_LABEL else None,
+        "uses_other_label": USE_OTHER_LABEL,
         "class_count": len(labels),
         "row_count": int(len(df)),
         "label_to_id": label_to_id,
@@ -593,18 +791,23 @@ def main() -> None:
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "source_model_dir": str(SOURCE_MODEL_DIR),
         "output_model_dir": str(OUTPUT_MODEL_DIR),
+        "data_pipeline_version": pipeline_version,
+        "expected_data_pipeline_version": EXPECTED_DATA_PIPELINE_VERSION,
+        "preprocess_created_at_utc": preprocess_metadata.get("created_at_utc"),
         "seed": SEED,
         "device": str(device),
         "freeze_encoder": freeze_encoder,
         "top_n_labels": TOP_N_LABELS,
+        "other_label": OTHER_LABEL if USE_OTHER_LABEL else None,
+        "uses_other_label": USE_OTHER_LABEL,
         "max_length": MAX_LENGTH,
         "epochs": len(history),
-        "max_epochs": CLASSIFIER_EPOCHS,
-        "early_stopping_patience": EARLY_STOPPING_PATIENCE,
+        "max_epochs": max_epochs,
+        "early_stopping_patience": early_stopping_patience,
         "batch_size": batch_size,
-        "feature_batch_size": feature_batch_size,
+        "feature_batch_size": FEATURE_BATCH_SIZE if not full_fine_tune else None,
         "learning_rate": learning_rate,
-        "training_mode": "frozen_bert_feature_extraction_classifier_head",
+        "training_mode": training_mode,
         "split_rows": {
             "train": int(len(train_df)),
             "train_original": int(original_train_rows),
@@ -612,9 +815,11 @@ def main() -> None:
             "validation": int(len(val_df)),
             "test": int(len(test_df)),
         },
+        "other_class_rows": int(selected_counts.get(OTHER_LABEL, 0)),
         "augmentation": {
-            "enabled": True,
+            "enabled": USE_SYNTHETIC_AUGMENTATION,
             "synthetic_rows": int(len(synthetic_df)),
+            "template_augmentation_enabled": USE_TEMPLATE_AUGMENTATION,
             "templates_per_term": len(SYNTHETIC_SENTENCE_TEMPLATES),
             "specific_sentence_labels": sorted(SPECIFIC_SYNTHETIC_SENTENCES),
         },

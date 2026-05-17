@@ -1,16 +1,19 @@
 {
-  "created_at_utc": "2026-05-17T06:56:04.686483+00:00",
+  "created_at_utc": "2026-05-17T16:29:07.532272+00:00",
+  "data_pipeline_version": "symptom_exploded_canonical_v3",
   "raw_data_path": "data\\raw\\house_md_data.csv",
   "ready_data_path": "data\\processed\\ready_data.csv",
   "encoding": "utf-8-sig",
   "target_column": "Symptom",
   "text_column": "text",
   "raw_rows": 7282,
-  "processed_rows": 4068,
+  "processed_rows": 4941,
+  "rows_before_symptom_explode": 4036,
+  "symptom_rows_added_by_explode": 905,
   "dropped_rows": {
     "empty_text": 4,
-    "missing_or_placeholder_target": 3210,
-    "total": 3214
+    "missing_or_placeholder_target": 3242,
+    "total": 2341
   },
   "columns": [
     "season",
@@ -57,25 +60,25 @@
       "medical_entities"
     ],
     "bert_top_n_labels": 100,
-    "bert_top_n_rows": 1062,
+    "bert_top_n_rows": 1688,
     "bert_top_n_class_count": 100,
-    "min_count_in_bert_top_n": 4
+    "min_count_in_bert_top_n": 6
   },
   "class_distribution": {
-    "total_classes": 2562,
-    "single_sample_classes": 2088,
-    "classes_under_5_samples": 2468,
+    "total_classes": 2446,
+    "single_sample_classes": 1822,
+    "classes_under_5_samples": 2297,
     "top_10": {
-      "kanama": 50,
-      "enfeksiyon": 46,
-      "nöbet": 42,
-      "ateş": 42,
-      "ağrı": 37,
-      "döküntü": 30,
-      "tümör": 29,
-      "kanser": 28,
-      "nefes darlığı": 24,
-      "taşikardi": 21
+      "ateş": 96,
+      "kanama": 89,
+      "nöbet": 75,
+      "enfeksiyon": 63,
+      "ağrı": 56,
+      "nefes darlığı": 53,
+      "döküntü": 51,
+      "pıhtı": 45,
+      "taşikardi": 39,
+      "karın ağrısı": 38
     }
   }
 }

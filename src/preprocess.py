@@ -18,6 +18,41 @@ BERT_LABEL_MAPPING_PATH = PROCESSED_DIR / "bert_top100_symptom_label_mapping.jso
 TARGET_COLUMN = "Symptom"
 TEXT_COLUMN = "text"
 BERT_TOP_N_LABELS = 100
+TARGET_SPLIT_PATTERN = r"[,;]+"
+DATA_PIPELINE_VERSION = "symptom_exploded_canonical_v3"
+
+CANONICAL_LABELS = {
+    "ateşli": "ateş",
+    "yüksek ateş": "ateş",
+    "enfarktüs": "kalp krizi",
+    "enfarktus": "kalp krizi",
+    "miyokard enfarktüsü": "kalp krizi",
+    "miyokard enfarktusu": "kalp krizi",
+    "heart attack": "kalp krizi",
+    "kardiyak arrest": "kalp durması",
+    "cardiac arrest": "kalp durması",
+    "solunum sıkıntısı": "nefes darlığı",
+    "solunum zorluğu": "nefes darlığı",
+    "solunum rahatsızlığı": "nefes darlığı",
+    "nefes alamama": "nefes darlığı",
+    "nefes alma güçlüğü": "nefes darlığı",
+    "öksürme": "öksürük",
+    "öksürüyor": "öksürük",
+    "seizure": "nöbet",
+    "epileptik nöbet": "nöbet",
+    "burun kanaması": "kanama",
+    "kan kaybı": "kanama",
+    "kanaması": "kanama",
+    "pıhtılaşma": "pıhtı",
+    "kan pıhtısı": "pıhtı",
+    "trombus": "pıhtı",
+    "trombüs": "pıhtı",
+    "halusinasyon": "halüsinasyon",
+    "inme": "felç",
+    "paralizi": "felç",
+    "böbrek fonksiyon kaybı": "böbrek yetmezliği",
+    "karaciğer fonksiyon kaybı": "karaciğer yetmezliği",
+}
 
 EXPECTED_COLUMNS = [
     "season",
@@ -57,6 +92,9 @@ MISSING_LABEL_VALUES = {
     "symptom",
     "belirti yok",
     "yok",
+    "tanı",
+    "tedavi",
+    "alay",
 }
 
 
@@ -82,10 +120,27 @@ def normalize_label(value):
 
     label = _normalize_unicode(str(value)).strip().lower()
     label = re.sub(r"\s+", " ", label)
+    label = CANONICAL_LABELS.get(label, label)
     if label in MISSING_LABEL_VALUES:
         return pd.NA
 
     return label
+
+
+def split_target_labels(value) -> list[str]:
+    if pd.isna(value):
+        return []
+
+    labels = []
+    seen = set()
+    for part in re.split(TARGET_SPLIT_PATTERN, str(value)):
+        label = normalize_label(part)
+        if pd.isna(label) or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+
+    return labels
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -168,9 +223,15 @@ def preprocess_data() -> None:
 
     prepared_df["clean_text"] = prepared_df[TEXT_COLUMN].apply(clean_text)
 
+    target_labels = prepared_df[TARGET_COLUMN].apply(split_target_labels)
     has_text = prepared_df["clean_text"].str.len() > 0
-    has_target = prepared_df[TARGET_COLUMN].notna()
+    has_target = target_labels.str.len() > 0
     processed_df = prepared_df[has_text & has_target].copy()
+    processed_df["_target_labels"] = target_labels[has_text & has_target]
+    rows_before_explode = len(processed_df)
+    processed_df = processed_df.explode("_target_labels").copy()
+    processed_df[TARGET_COLUMN] = processed_df["_target_labels"]
+    processed_df = processed_df.drop(columns=["_target_labels"]).reset_index(drop=True)
 
     label_mapping = build_label_mapping(processed_df[TARGET_COLUMN])
     processed_df["label"] = processed_df[TARGET_COLUMN].map(
@@ -191,6 +252,7 @@ def preprocess_data() -> None:
 
     metadata = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "data_pipeline_version": DATA_PIPELINE_VERSION,
         "raw_data_path": str(RAW_DATA_PATH),
         "ready_data_path": str(READY_DATA_PATH),
         "encoding": used_encoding,
@@ -198,6 +260,8 @@ def preprocess_data() -> None:
         "text_column": TEXT_COLUMN,
         "raw_rows": int(raw_row_count),
         "processed_rows": int(len(processed_df)),
+        "rows_before_symptom_explode": int(rows_before_explode),
+        "symptom_rows_added_by_explode": int(len(processed_df) - rows_before_explode),
         "dropped_rows": {
             "empty_text": int((~has_text).sum()),
             "missing_or_placeholder_target": int((has_text & ~has_target).sum()),
