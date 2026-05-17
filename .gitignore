@@ -6,18 +6,19 @@ __pycache__/
 venv/
 ENV/
 
-# Veri dosyaları (Çok büyük oldukları için Drive'dan paylaşılmalı)
-data/raw/*.csv
-data/raw/*.xlsx
-data/processed/*.csv
+# Veri dosyaları
+data/
 
-# Model çıktıları ve Checkpointler (En önemli kısım)
-models/
+# Model çıktıları ve Checkpointler
 outputs/
 *.bin
 *.pt
 *.pth
-*.safetensors
+
+# --- KRİTİK DEĞİŞİKLİK ---
+# Sadece devasa model ağırlık dosyasını engelliyoruz
+models/**/model.safetensors
+models/**/pytorch_model.bin
 
 # VS Code ayarları
 .vscode/
