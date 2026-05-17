@@ -1,0 +1,81 @@
+{
+  "created_at_utc": "2026-05-17T06:56:04.686483+00:00",
+  "raw_data_path": "data\\raw\\house_md_data.csv",
+  "ready_data_path": "data\\processed\\ready_data.csv",
+  "encoding": "utf-8-sig",
+  "target_column": "Symptom",
+  "text_column": "text",
+  "raw_rows": 7282,
+  "processed_rows": 4068,
+  "dropped_rows": {
+    "empty_text": 4,
+    "missing_or_placeholder_target": 3210,
+    "total": 3214
+  },
+  "columns": [
+    "season",
+    "episode",
+    "speaker",
+    "Symptom",
+    "Test",
+    "Drug",
+    "Procedure",
+    "Intent",
+    "diagnosis_stage",
+    "Sarcasm",
+    "Emotion",
+    "Organ",
+    "correct_prediction",
+    "model_prediction",
+    "text",
+    "medical_entities",
+    "clean_text",
+    "label"
+  ],
+  "feature_selection": {
+    "bert_input_feature": "clean_text",
+    "target": "Symptom",
+    "retained_context_columns": [
+      "season",
+      "episode",
+      "speaker",
+      "Test",
+      "Drug",
+      "Procedure",
+      "Intent",
+      "diagnosis_stage",
+      "Sarcasm",
+      "Emotion",
+      "Organ",
+      "correct_prediction",
+      "model_prediction",
+      "medical_entities"
+    ],
+    "excluded_from_model_input": [
+      "correct_prediction",
+      "model_prediction",
+      "medical_entities"
+    ],
+    "bert_top_n_labels": 100,
+    "bert_top_n_rows": 1062,
+    "bert_top_n_class_count": 100,
+    "min_count_in_bert_top_n": 4
+  },
+  "class_distribution": {
+    "total_classes": 2562,
+    "single_sample_classes": 2088,
+    "classes_under_5_samples": 2468,
+    "top_10": {
+      "kanama": 50,
+      "enfeksiyon": 46,
+      "nöbet": 42,
+      "ateş": 42,
+      "ağrı": 37,
+      "döküntü": 30,
+      "tümör": 29,
+      "kanser": 28,
+      "nefes darlığı": 24,
+      "taşikardi": 21
+    }
+  }
+}
