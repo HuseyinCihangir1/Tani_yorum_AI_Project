@@ -10,6 +10,7 @@ ENV/
 data/raw/*.csv
 data/raw/*.xlsx
 data/processed/*.csv
+!data/processed/ready_data.csv
 
 # Model çıktıları ve Checkpointler (En önemli kısım)
 models/
